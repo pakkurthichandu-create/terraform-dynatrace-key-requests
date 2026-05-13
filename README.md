@@ -119,3 +119,23 @@ When the code is pushed to Git, the Jenkins pipeline will automatically run:
 If we have separate files for different environments (like qa.tfvars or staging.tfvars), we can run:
 
 terraform apply -auto-approve -var-file="qa.tfvars"
+
+---
+
+### Migration of Existing Data:
+If endpoints are already marked manually in Dynatrace, we must migrate them into the Terraform state before the first pipeline run. **Failure to do this will cause the pipeline to fail with "Already Exists" errors.**
+
+We have two approaches to migrate the existing data into the terraform state. One is by using a command and the other is by writing code. 
+
+1. **Approach 1 (Command)**:
+   `terraform import dynatrace_key_requests.api_gateway_key_requests <SERVICE_ID>`
+
+2. **Approach 2 (Code)**:
+   Add a `import` block to `main.tf`:
+   ```hcl
+   import {
+     to = dynatrace_key_requests.api_gateway_key_requests
+     id = data.dynatrace_entity.service.id
+   }
+
+Note: You can remove this block after the first successful run to keep the code clean)
