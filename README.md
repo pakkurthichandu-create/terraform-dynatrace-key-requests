@@ -6,19 +6,19 @@ To create a Terraform configuration for this task, we need the environment URL w
 
 1. Environment URL: We can take this directly from the URL of the Dynatrace environment. 
 
-Example: https://ucr29527.apps.dynatrace.com/
+    Example: https://ucr29527.apps.dynatrace.com/
 
 2. API token: We can generate this from the access tokens in Dynatrace. While generating the new token, we have to allow the permissions that this token needs to access. As mentioned in the Terraform registry documentation https://registry.terraform.io/providers/dynatrace-oss/dynatrace/latest/docs/resources/key_requests, we have to give the permissions of settings.read and settings.write. And we will store this token in jenkins credentials so that it will not be exposed.
 
 3. Service Name: Instead of manually looking up a long Service ID, we will use the Service Name as it appears in Dynatrace. Terraform will then use a "Data Source" to find the correct ID automatically during execution.
 
-Example: 
-```hcl
-data "dynatrace_entity" "service" {
-  type = "SERVICE"
-  name = var.service_name 
-}
-```
+    Example: 
+    ```hcl
+    data "dynatrace_entity" "service" {
+      type = "SERVICE"
+      name = var.service_name 
+    }
+    ```
 
 4. List of APIs: Select the APIs that need to be marked as key requests. These names will be stored in the terraform.tfvars file, making it easy to add or remove endpoints in the future.
 
