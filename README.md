@@ -1,4 +1,4 @@
-# Documentation: Automating Dynatrace Key Requests
+# Automating Dynatrace Key Requests
 
 The goal is to automate the creation of "Key Requests" for a service in Dynatrace using Terraform. Currently, key requests are managed manually in the Dynatrace UI. We want to transition this process to an automated approach using Terraform.
 
