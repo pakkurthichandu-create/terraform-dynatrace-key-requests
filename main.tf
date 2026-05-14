@@ -23,8 +23,7 @@ provider "dynatrace" {
 data "dynatrace_entity" "service" {
   for_each = var.projects
 
-  type = "SERVICE"
-  name = each.key
+  entity_selector = "type(\"SERVICE\"),entityName.equals(\"${each.key}\")"
 }
 
 resource "dynatrace_key_requests" "key_requests" {
