@@ -1,8 +1,10 @@
 terraform {
   backend "s3" {
-    bucket = "my-terraform-state-bucket"
-    key    = "key-requests.tfstate"
-    region = "us-east-1"
+    bucket       = "terraform-state-bucket-4440"
+    key          = "key-requests.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+    encrypt      = true
   }
 
   required_providers {
@@ -19,11 +21,15 @@ provider "dynatrace" {
 }
 
 data "dynatrace_entity" "service" {
+  for_each = var.projects
+
   type = "SERVICE"
-  name = var.service_name
+  name = each.key
 }
 
-resource "dynatrace_key_requests" "api_gateway_key_requests" {
-  service = data.dynatrace_entity.service.id
-  names   = var.key_request_names
+resource "dynatrace_key_requests" "key_requests" {
+  for_each = var.projects
+
+  service = data.dynatrace_entity.service[each.key].id
+  names   = each.value.key_request_names
 }
