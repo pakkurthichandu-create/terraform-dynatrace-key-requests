@@ -3,7 +3,7 @@ variable "dynatrace_api_token" {
   description = "The Dynatrace API token (stored in Jenkins credentials)"
   sensitive   = true
   validation {
-    condition     = length(trim(var.dynatrace_api_token)) > 0
+    condition     = length(trimspace(var.dynatrace_api_token)) > 0
     error_message = "dynatrace_api_token must not be empty."
   }
 }
@@ -25,9 +25,9 @@ variable "projects" {
   validation {
     condition = alltrue([
       for project_key, project in var.projects :
-      length(trim(project_key)) > 0 &&
+      length(trimspace(project_key)) > 0 &&
       length(project.key_request_names) > 0 &&
-      alltrue([for name in project.key_request_names : length(trim(name)) > 0])
+      alltrue([for name in project.key_request_names : length(trimspace(name)) > 0])
     ])
     error_message = "Each project key (service name) must be non-empty, and each project must have a non-empty key_request_names list with non-empty strings."
   }
