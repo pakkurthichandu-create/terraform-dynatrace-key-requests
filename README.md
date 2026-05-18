@@ -15,7 +15,7 @@ To create a Terraform configuration for this task, we need the environment URL w
     Example: 
     ```hcl
     data "dynatrace_entities" "service" {
-      for_each        = var.projects
+      for_each        = local.csv_projects
       from            = "now-24h"
       entity_selector = "type(\"SERVICE\"),fromRelationships.isServiceOf(type(\"CLOUD_APPLICATION\"),entityName.equals(\"${each.key}\"))"
     }
