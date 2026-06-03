@@ -30,14 +30,6 @@ data "dynatrace_entities" "service" {
   entity_selector = "type(\"SERVICE\"),fromRelationships.isServiceOf(type(\"CLOUD_APPLICATION\"),entityName.equals(\"${each.key}\"))"
 }
 
-locals {
-  latest_service_id = {
-    for service_name, entities_payload in data.dynatrace_entities.service : service_name => length(entities_payload.entities) > 0 ? [
-      for entity in entities_payload.entities : entity.entity_id
-    ][index([for entity in entities_payload.entities : entity.last_seen_tms], max([for entity in entities_payload.entities : entity.last_seen_tms]...))] : null
-  }
-}
-
 resource "dynatrace_key_requests" "key_requests" {
   for_each = { for service_name, endpoints in local.csv_projects : service_name => endpoints if local.latest_service_id[service_name] != null }
   service  = local.latest_service_id[each.key]

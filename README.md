@@ -1,16 +1,16 @@
 # Automating Dynatrace Key Requests
 
-The goal is to automate the creation of "Key Requests" for a service in Dynatrace using Terraform. Currently, key requests are managed manually in the Dynatrace UI. We want to transition this process to an automated approach using Terraform.
+The goal is to automate the creation of "Key Requests" for a service in Dynatrace using Terraform. This project transitions the manual management in the Dynatrace UI to an automated approach.
 
-To create a Terraform configuration for this task, we need the environment URL where the updates should be applied, an API token to allow Terraform to modify the key requests, a Service Name to target the specific service, and the list of APIs (endpoints) that need to be updated.
+Building the configuration requires the environment URL, an API token, the Workload Name, and the list of APIs (endpoints).
 
-1. Environment URL: We can take this directly from the URL of the Dynatrace environment. 
+1. Environment URL: Obtained directly from the URL of the Dynatrace environment. 
 
     Example: https://ucr29527.apps.dynatrace.com/
 
-2. API token: We can generate this from the access tokens in Dynatrace. While generating the new token, we have to allow the permissions that this token needs to access. As mentioned in the Terraform registry documentation https://registry.terraform.io/providers/dynatrace-oss/dynatrace/latest/docs/resources/key_requests, we have to give the permissions of settings.read and settings.write. And need entities.read for data source. And we will store this token in jenkins credentials so that it will not be exposed.
+2. API token: Generated from access tokens in Dynatrace. Per the documentation (https://registry.terraform.io/providers/dynatrace-oss/dynatrace/latest/docs/resources/key_requests), the token requires settings.read, settings.write, and entities.read for data source. Storing this token in Jenkins credentials prevents exposure.
 
-3. Service Name: Instead of manually looking up a long Service ID, we will use the Service Name as it appears in Dynatrace. Terraform will then use a "Data Source" to find the correct ID automatically during execution.
+3. Workload Name: Instead of manual ID lookups, the Kubernetes Workload Name (from the CSV) is used. Terraform then uses a "Data Source" to find the correct linked Service ID automatically.
 
     Example: 
     ```hcl
@@ -21,31 +21,28 @@ To create a Terraform configuration for this task, we need the environment URL w
     }
     ```
 
-4. List of APIs: Select the APIs that need to be marked as key requests. These names will be stored in the terraform.tfvars file, making it easy to add or remove endpoints in the future.
+4. List of APIs: Select the APIs that need to be marked as key requests. These names are stored in the services.csv file, making it easy to add or remove endpoints in the future.
 
 
-Now that we have all the required details, we can prepare the Terraform code for our task.
+With the required details prepared, the Terraform configuration consists of the following files:
 
-We need four files:
-1. main.tf: For the provider and main resource logic. We can also create a separate `provider.tf`, but in this case, I am adding it directly to `main.tf`. 
-2. variables.tf: To define the variables. This allows us to provide details during execution so we don't expose sensitive data in our files.
-3. terraform.tfvars: To store the environment URL and service names. Use this file for easy management without touching the main code.
-4. outputs.tf: To show a summary of the results in the terminal. This tells us exactly which Service IDs and endpoints were marked so we can verify the work easily.
+1. **main.tf**: Contains the provider configuration, data sources, and core resource logic. 
+2. **variables.tf**: Defines required input variables, ensuring sensitive data is not hardcoded.
+3. **terraform.tfvars**: Stores non-sensitive configuration values like the environment URL.
+4. **services.csv**: Maps workload names to their required endpoints for automated discovery and creation.
+5. **backend-prod.conf**: Stores S3 bucket details for secure remote state management.
+6. **outputs.tf**: Summarizes the execution results, listing successfully marked services and any missing/inactive ones.
 
 main.tf:
 
 ```hcl
-# We are specifying the provider version so that we don't have issues in the future.
-# Storing the state file in s3 bucket so that we can share this state file across the team and avoid the storing in jenkins server
+# Provider version is specified to ensure stability and future compatibility.
+# State file is stored in an S3 bucket for team collaboration and persistence.
 terraform {
   required_version = "~> 1.14.0"
 
   backend "s3" {
-    bucket       = "terraform-state-bucket-44406283"
-    key          = "key-requests.tfstate"
-    region       = "us-east-1"
-    use_lockfile = true
-    encrypt      = true
+    # Configuration is loaded from .conf files for security and portability.
   }
 
   required_providers {
@@ -56,22 +53,28 @@ terraform {
   }
 }
 
-# The provider connects to the Dynatrace environment.
-# We use var.dt_env_url and var.dynatrace_api_token which will be provided during execution by using the tfvars file.
+# The provider establishes connection to the Dynatrace environment.
+# Variables dt_env_url and dynatrace_api_token are provided during execution via environment variables or tfvars.
 provider "dynatrace" {
   dt_env_url   = var.dt_env_url
   dt_api_token = var.dynatrace_api_token
 }
 
-# This block searches Dynatrace for the service id by its name.
+# Searches Dynatrace for the service ID based on the Workload Name.
 data "dynatrace_entities" "service" {
-  for_each        = var.projects
+  for_each        = local.csv_projects
   from            = "now-24h"
   entity_selector = "type(\"SERVICE\"),fromRelationships.isServiceOf(type(\"CLOUD_APPLICATION\"),entityName.equals(\"${each.key}\"))"
 }
 
-# This local calculates the most recent service ID and handles empty results safely.
+# Iterates through service results to identify the most recently active ID.
+# Handles empty results by assigning a null value.
 locals {
+  # CSV Parsing logic
+  csv_raw      = [for row in csvdecode(file("${path.module}/services.csv")) : row if trimspace(row.workload) != "" && trimspace(row.endpoint) != ""]
+  csv_projects = { for name, endpoints in { for row in local.csv_raw : row.workload => row.endpoint... } : name => distinct(endpoints) }
+
+  # Discovery logic
   latest_service_id = {
     for service_name, entities_payload in data.dynatrace_entities.service : service_name => length(entities_payload.entities) > 0 ? [
       for entity in entities_payload.entities : entity.entity_id
@@ -79,19 +82,19 @@ locals {
   }
 }
 
-# We use the resource "dynatrace_key_requests" to create the key requests.
-# It only runs for services that were actually found in Dynatrace.
+# The dynatrace_key_requests resource creates the key requests in Dynatrace.
+# Execution is restricted to services successfully discovered in the data source.
 resource "dynatrace_key_requests" "key_requests" {
-  for_each = { for service_name, config in var.projects : service_name => config if local.latest_service_id[service_name] != null }
+  for_each = { for service_name, endpoints in local.csv_projects : service_name => endpoints if local.latest_service_id[service_name] != null }
   service  = local.latest_service_id[each.key]
-  names    = each.value.key_request_names
+  names    = each.value
 }
 ```
 
 variables.tf:
 
 ```hcl
-# API token generated from Dynatrace
+# Dynatrace API token with required scopes for environment modification.
 variable "dynatrace_api_token" {
   type      = string
   sensitive = true
@@ -101,14 +104,7 @@ variable "dynatrace_api_token" {
   }
 }
 
-# Per-service key request configuration
-variable "projects" {
-  type = map(object({
-    key_request_names = list(string)
-  }))
-}
-
-# URL of the Dynatrace environment
+# URL for the target Dynatrace environment.
 variable "dt_env_url" {
   type = string
   validation {
@@ -123,59 +119,84 @@ terraform.tfvars:
 ```hcl
 # Example values
 dt_env_url = "https://ucr29527.apps.dynatrace.com/"
-
-projects = {
-  "api-gateway-service" = {
-    key_request_names = ["/login", "/saveUser"]
-  }
-}
 ```
 
 outputs.tf:
 
 ```hcl
-# This shows exactly which services and endpoints were successfully updated.
-output "marked_service_ids" {
-  description = "A map of service names, their Dynatrace IDs, and the endpoints marked as key requests."
+# Displays services successfully updated in Dynatrace.
+output "successfully_marked_services" {
+  description = "Services found and successfully marked in Dynatrace"
   value = {
     for name, id in local.latest_service_id : name => {
       service_id = id
-      endpoints  = var.projects[name].key_request_names
+      endpoints  = local.csv_projects[name]
     } if id != null
   }
 }
+
+# Displays services requested but not found in Dynatrace.
+output "failed_or_inactive_services" {
+  description = "Services in CSV that were NOT found (Check for typos or inactivity in the last 24h)"
+  value = [
+    for name, id in local.latest_service_id : name if id == null
+  ]
+}
 ```
 
-Automation and Execution:
+### Steps to Execute
 
-To automate this process, we use a terraform.tfvars file to provide the values for dt_env_url, service_name, and key_request_names. For security, the dynatrace_api_token is provided via an environment variable in jenkins.
+**Step 1: Provide the API Token.**
+Securely provide the Dynatrace API token as an environment variable to ensure it is not exposed in local files.
+```bash
+export TF_VAR_dynatrace_api_token="<your_token>"
+```
 
-When the code is pushed to Git, the Jenkins pipeline will automatically run:
-1. terraform init
-2. terraform validate
-3. terraform plan
-4. terraform apply
+**Step 2: Create a backend configuration file.**
+Create a file named `backend-prod.conf` in the local `terraform/` directory. This file contains the S3 bucket details.
 
-If we have separate files for different environments (like qa.tfvars or staging.tfvars), we can run:
+Example (`backend-prod.conf`):
+```hcl
+bucket       = "terraform-state-bucket-44406283"
+key          = "key-requests.tfstate"
+region       = "us-east-1"
+use_lockfile = true
+encrypt      = true
+```
 
-terraform apply -auto-approve -var-file="qa.tfvars"
+**Step 3: Initialize Terraform.**
+Run the initialization command and provide the path to the configuration file created in Step 2.
+```bash
+terraform init -backend-config="./backend-prod.conf"
+```
 
----
+**Step 4: Execute Plan.**
+Preview the changes before applying them. If the plan shows unexpected changes (such as deleting or recreating existing key requests), refer to the **Migration of Existing Data** section below to "adopt" them into Terraform instead of recreating them.
+```bash
+terraform plan
+```
+
+**Step 5: Execute Apply.**
+Apply the changes to the Dynatrace environment once the plan is verified.
+```bash
+terraform apply -auto-approve
+```
 
 ### Migration of Existing Data (Adoption Strategy)
 
-If we already have key requests marked manually in the Dynatrace UI, **do not delete them.** Deleting and recreating will give them a new ID, which will break our current Dashboards and historical metrics.
+If key requests are already marked manually in the Dynatrace UI, **do not delete them.** Deleting and recreating key requests assigns a new ID, which disrupts existing Dashboards and historical metrics.
 
-Instead, follow this "Adoption" workflow:
+Follow this "Adoption" workflow to integrate existing configurations into Terraform:
 
-1. **Dry Run**: Run `terraform plan`. If Terraform says it wants to "Create" a service that we know is already marked in the UI, we should import it instead.
-2. **Bulk Import**: For many services (like 200+), do not run the import command manually. Instead, use an `import` block in our code for each service.
+1. **Dry Run**: Run `terraform plan`. If Terraform attempts to "Create" a key request that already exists in the UI, use the import process instead.
+2. **Bulk Import**: For large-scale migrations (e.g., 200+ services), use an `import` block within the configuration for each service to avoid manual command-line overhead.
 
-**Example Command (Approach 1):**
+**Approach 1: Command Line Import**
+Utilize the following command for individual resource adoption:
 `terraform import 'dynatrace_key_requests.key_requests["server-registry-qa"]' <SERVICE_ID>`
 
-**Example Code (Approach 2 - Recommended for Dashboards):**
-Add this to your configuration temporarily to "adopt" the existing request:
+**Approach 2: Declarative Import Block **
+Incorporate an `import` block into the configuration for a managed adoption process:
 ```hcl
 import {
   to = dynatrace_key_requests.key_requests["server-registry-qa"]
